@@ -14,6 +14,8 @@ using Microsoft.Win32;
 using System.Diagnostics;
 using System.Threading;
 using System.Net.NetworkInformation;
+using System.Net;
+using System.Net.Sockets;
 
 namespace SecInfo1
 {
@@ -45,46 +47,7 @@ namespace SecInfo1
 
         }
 
-        public string read(string p1)
-        {
-            try
-            {
-                NpgsqlConnection conn = new NpgsqlConnection("Server = 127.0.0.1; Port = 5432; User Id = postgres; Password = postgres; Database = secinf");
-                conn.Open();
-
-                NpgsqlCommand com = new NpgsqlCommand("SELECT user_token from license where license.proc_id='" + p1 + "'", conn); ;
-
-                NpgsqlDataReader reader;
-                reader = com.ExecuteReader();
-
-                string[,] nums = new string[100, 100];
-                int a = 0;
-                
-                while (reader.Read())
-                {
-                    try
-                    {
-                        nums[a, 0] = reader.GetString(0);
-                    }
-                    catch (Exception ex)
-                    {
-                        MessageBox.Show($"Ошибка: {ex.Message}", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    }
-                    a++;
-                }
-
-                conn.Close();
-                string s = nums[0, 0];
-
-                return s;
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Ошибка: {ex.Message}","Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                throw ex;
-            }
-
-        }
+        
 
         public bool regedit_check(string p1, string p2, string veryf, bool license)
         {
@@ -140,6 +103,49 @@ namespace SecInfo1
         bool active = false;
         bool set = false;
 
+        public bool req_serv(string serial, string pid, string method)
+        {
+            // адрес и порт сервера, к которому будем подключаться
+            int port = 8005; // порт сервера
+            string address = "127.0.0.1"; // адрес сервера
+
+            try
+            {
+                IPEndPoint ipPoint = new IPEndPoint(IPAddress.Parse(address), port);
+
+                Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+                // подключаемся к удаленному хосту
+                socket.Connect(ipPoint);
+
+                string message = method + " |Method| " + serial + pid;
+                byte[] data = Encoding.Unicode.GetBytes(message);
+                socket.Send(data);
+
+                // получаем ответ
+                data = new byte[256]; // буфер для ответа
+                StringBuilder builder = new StringBuilder();
+                int bytes = 0; // количество полученных байт
+
+                do
+                {
+                    bytes = socket.Receive(data, data.Length, 0);
+                    builder.Append(Encoding.Unicode.GetString(data, 0, bytes));
+                }
+                while (socket.Available > 0);
+
+                if (builder.ToString() == "true") return true;
+                else return false;
+
+                    // закрываем сокет
+                socket.Shutdown(SocketShutdown.Both);
+                socket.Close();
+            }
+            catch (Exception ex)
+            {
+                throw ex;
+            }
+        }
+
         private void Init()
         {
             string pid = null;
@@ -167,83 +173,57 @@ namespace SecInfo1
                 pid = queryObj["ProcessorId"].ToString();
             }
 
-            veryf = read(Hash(serial + pid));
+            //veryf = read(Hash(serial + pid));
 
             label1.Text = "Проверка подключения к интернету";
             Application.DoEvents();
             Thread.Sleep(500);
 
+            IPStatus status = IPStatus.Unknown;
+            try
+            {
+                Ping p = new Ping();
+                PingReply pr = p.Send(@"google.com");
+                status = pr.Status;
+            }
+            catch { }
+            if (status == IPStatus.Success)
+            {
+                label1.Text = "Подключение к интернету установлено";
+            }
+            else
+            {
+                label1.Text = "Проверьте подключение к интернету!";
+                return;
+            }
 
             label2.Visible = true;
             label2.Text = "Проверка лицензии";
             Application.DoEvents();
             Thread.Sleep(500);
 
-            if (!regedit_check(serial, pid, veryf, license))
+            richTextBox2.Text = Hash(serial + pid);
+
+            //MessageBox.Show("processor: " + pid + '\n' + name + "\nHardDrive: " + h_id + '\n' + serial, "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (!req_serv(serial, pid, "check"))
             {
-
-                IPStatus status = IPStatus.Unknown;
-                try
-                {
-                    Ping p = new Ping();
-                    PingReply pr = p.Send(@"google.com");
-                    status = pr.Status;
-                }
-                catch { }
-                if (status == IPStatus.Success)
-                {
-                    label1.Text = "Подключение к интернету установлено";
-                }
-                else
-                {
-                    label1.Text = "Проверьте подключение к интернету!";
-                    return;
-                }
-
-                richTextBox2.Text = Hash(serial + pid);
-
-                //MessageBox.Show("processor: " + pid + '\n' + name + "\nHardDrive: " + h_id + '\n' + serial, "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
-
-                if (veryf == null)
-                {
-                    label2.Text = "Запуск программы невозможен.\nДля получения лицензии отправьте указанный ключ ниже разработчикам программы\nПрограмма активируется автоматически";
-                    button1.Visible = true;
-                    richTextBox2.Visible = true;
-                    this.Size = new System.Drawing.Size(488, 330);
-                    return;
-                }
-                else
-                {
-                    if (veryf == Hashh(Hash(serial + pid)))
-                        license = regedit(serial, pid, veryf, license);
-                    else license = false;
-                }
-
-                if (license)
-                {
-                    if (!set)
-                        label2.Text = "Программа является лицензионной";
-                    else label2.Text = "Лицензия установлена";
-
-                    Thread.Sleep(500);
-                    Application.DoEvents();
-                }
-                else
-                {
-                    MessageBox.Show("Данная копия программы не является лицензионной! Обратитесь к разработчку для приобритения лицензии!", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    Process.GetCurrentProcess().Kill();
-                }
+                label2.Text = "Запуск программы невозможен.\nДля получения лицензии отправьте указанный ключ ниже разработчикам программы\nПрограмма активируется автоматически";
+                button1.Visible = true;
+                richTextBox2.Visible = true;
+                this.Size = new System.Drawing.Size(488, 330);
+                return;
             }
             else
             {
-                //MessageBox.Show("hmm");
                 label2.Text = "Программа является лицензионной";
+                Application.DoEvents();
                 Thread.Sleep(500);
                 this.Hide();
                 Form2 f2 = new Form2();
                 f2.ShowDialog();
-
+                Thread.Sleep(500);        
             }
+
 
         }
 
